@@ -40,11 +40,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "NNE")
 	TObjectPtr<UNNEModelData> ModelData;
 
+
+	UFUNCTION(BlueprintCallable, Category = "NNE|Solver")
+	float FireProjectileWithAI(FVector TargetLocation);
+
 	/**
 	 * 상황 데이터를 입력하면 최적의 [각도, 힘]을 반환하는 핵심 함수입니다.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "NNE|Solver")
-	FLaunchParams GetAILaunchParameters(float HorizontalDist, float HeightDiff, float Weight, float Radius, float TargetRad);
+	float GetAILaunchParameters(float HorizontalDist, float HeightDiff);
 
 protected:
 	virtual void BeginPlay() override;

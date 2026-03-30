@@ -10,32 +10,33 @@ from sklearn.preprocessing import StandardScaler
 csv_name = "ProjectileTrainingData.csv"
 if not os.path.exists(csv_name):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_name = os.path.join(base_dir, "..", "Saved", "ProjectileTrainingData.csv")
+    csv_name = os.path.join(base_dir, "..", "Saved", csv_name)
 
 if not os.path.exists(csv_name):
     print(f"❌ 에러: {csv_name} 파일을 찾을 수 없습니다!")
     exit()
 
 # 2. 데이터 로드
+# 데이터 구조: [0]수평거리, [1]높이차, [2]각도, [3]성공여부 (총 4개 열)
 data = pd.read_csv(csv_name, header=None)
-print(f"📊 총 데이터 개수: {len(data)}개")
+print(f"📊 수집된 총 데이터: {len(data)}개")
 
-# 3. 데이터 전처리 (성공 데이터 추출)
-# 8번째 열(인덱스 7)이 Hit 여부입니다.
-hit_column_idx = 7 
+# 3. 데이터 전처리 (성공 데이터만 추출)
+# 이제 Hit 여부는 4번째 열(인덱스 3)에 있습니다.
+hit_column_idx = 3 
 data[hit_column_idx] = pd.to_numeric(data[hit_column_idx], errors='coerce')
 hit_data = data[data[hit_column_idx] == 1].dropna()
-print(f"✅ 찾아낸 성공(Hit) 데이터: {len(hit_data)}개")
+print(f"✅ 학습에 사용할 성공 데이터: {len(hit_data)}개")
 
-if len(hit_data) < 10:
-    print("❌ 데이터가 너무 적습니다. 더 수집해주세요.")
+if len(hit_data) < 5:
+    print("❌ 성공 데이터가 부족합니다. 언리얼에서 힘을 고정한 채로 데이터를 더 수집해주세요.")
     exit()
 
 # 4. 입력(X)과 출력(y) 분리
-# 입력(X): 수평거리(0), 높이차(1), 무게(4), 반지름(5), 타겟반지름(6) -> 총 5개
-X = hit_data.iloc[:, [0, 1, 4, 5, 6]].values
-# 출력(y): 각도(2), 힘(3) -> 총 2개
-y = hit_data.iloc[:, [2, 3]].values
+# 입력(X): [0]수평거리, [1]높이차 -> 2개
+X = hit_data.iloc[:, [0, 1]].values
+# 출력(y): [2]각도 -> 1개 (힘은 고정값이므로 예측에서 제외)
+y = hit_data.iloc[:, [2]].values
 
 # 5. 정규화 (StandardScaler)
 scaler_X = StandardScaler()
@@ -44,27 +45,30 @@ scaler_y = StandardScaler()
 X_scaled = scaler_X.fit_transform(X)
 y_scaled = scaler_y.fit_transform(y)
 
-# [언리얼용] 나중에 C++ 코드에 복사할 값들 출력
-print("\n--- [언리얼용] 입력(X) 정규화 값 (5개 항목) ---")
-print("Means (평균):", scaler_X.mean_.tolist())
-print("Scales (표준편차):", scaler_X.scale_.tolist())
-print("\n--- [언리얼용] 출력(y) 역정규화 값 (2개 항목) ---")
-print("Means (평균):", scaler_y.mean_.tolist())
-print("Scales (표준편차):", scaler_y.scale_.tolist())
+# [언리얼 C++ 복사용] 정규화 파라미터 출력
+print("\n" + "="*50)
+print("📌 [언리얼 C++용] 입력(X) 정규화 값 (순서: 수평거리, 높이차)")
+print("Means (평균):", [round(x, 4) for x in scaler_X.mean_.tolist()])
+print("Scales (표준편차):", [round(x, 4) for x in scaler_X.scale_.tolist()])
+print("-" * 50)
+print("📌 [언리얼 C++용] 출력(y) 역정규화 값 (항목: 각도)")
+print("Mean (평균):", [round(y[0], 4) for y in scaler_y.mean_.reshape(-1, 1).tolist()])
+print("Scale (표준편차):", [round(y[0], 4) for y in scaler_y.scale_.reshape(-1, 1).tolist()])
+print("="*50 + "\n")
 
 X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
 y_tensor = torch.tensor(y_scaled, dtype=torch.float32)
 
-# 6. 모델 정의
-# [중요] 입력 특징이 5개이므로 첫 번째 Linear의 입력을 5로 설정합니다.
+# 6. 신경망 모델 정의
+# 입력 2개 -> 출력 1개 (각도)
 model = nn.Sequential(
-    nn.Linear(5, 256), 
+    nn.Linear(2, 256), 
     nn.LeakyReLU(0.1),
     nn.Linear(256, 128),
     nn.LeakyReLU(0.1),
     nn.Linear(128, 64),
     nn.LeakyReLU(0.1),
-    nn.Linear(64, 2)
+    nn.Linear(64, 1) # 마지막 노드를 1로 변경
 )
 
 # 7. 학습 설정
@@ -72,8 +76,8 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.005)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3000, gamma=0.5)
 
-# 8. 학습 루프
-print("\n🚀 학습 시작...")
+# 8. 학습 진행
+print("🚀 각도 예측 AI 학습 중...")
 for epoch in range(10000):
     pred = model(X_tensor)
     loss = criterion(pred, y_tensor)
@@ -86,11 +90,11 @@ for epoch in range(10000):
     if (epoch + 1) % 1000 == 0:
         print(f"에포크 [{epoch+1}/10000], 오차(Loss): {loss.item():.6f}")
 
-# 9. ONNX 모델로 내보내기
+# 9. ONNX 모델 내보내기
 model.eval()
-dummy_input = torch.randn(1, 5) # 입력 크기 5로 변경
-onnx_path = "ProjectileSolver_Final.onnx"
+dummy_input = torch.randn(1, 2) 
+onnx_path = "ProjectileSolver_AngleOnly.onnx"
 torch.onnx.export(model, dummy_input, onnx_path, verbose=False,
-                  input_names=['input'], output_names=['output'])
+                  input_names=['input'], output_names=['angle_output'])
 
-print(f"\n✅ 학습 완료! 모델 저장됨: {onnx_path}")
+print(f"\n✅ 학습 완료! 각도 전용 모델 저장됨: {onnx_path}")

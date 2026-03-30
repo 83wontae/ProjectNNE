@@ -21,38 +21,59 @@ void ANNE_ProjectileSolver::BeginPlay()
 	}
 }
 
-FLaunchParams ANNE_ProjectileSolver::GetAILaunchParameters(float HorizontalDist, float HeightDiff, float Weight, float Radius, float TargetRad)
+float ANNE_ProjectileSolver::FireProjectileWithAI(FVector TargetLocation)
 {
-	FLaunchParams Results;
-	if (!ModelInstance.IsValid()) return Results;
+	// 1. AI 계산에 필요한 입력값 준비
+	FVector StartLocation = GetActorLocation(); // 발사 위치
+	FVector Diff = TargetLocation - StartLocation;
 
-	// ==========================================================
-	// [필독!] 파이썬 학습 완료 후 출력된 숫자를 여기에 정확히 복사하세요.
-	// 순서: [수평거리, 높이차, 무게, 반지름, 타겟반지름]
-	// ==========================================================
-	float X_Means[] = { 968.8f, -135.34f, 40.f, 32.f, 32.f }; // <-- 파이썬의 Means (5개)
-	float X_Scales[] = { 428.8f, 327.79f, 1.f, 1.f, 1.f };   // <-- 파이썬의 Scales (5개)
+	float HorizontalDist = FVector2D(Diff.X, Diff.Y).Size();
+	float HeightDiff = Diff.Z;
+
+	// 2. AI 솔버로부터 예측 파라미터 가져오기
+	float fAngle = GetAILaunchParameters(HorizontalDist, HeightDiff);
+
+	// FVector ForwardDir = Diff.GetSafeNormal();
+	// FVector RotationAxis = FVector::CrossProduct(ForwardDir, FVector::UpVector).GetSafeNormal();
+
+	// 3. AI가 준 각도(fAngle)만큼 축을 기준으로 ForwardDir을 회전시킵니다.
+	// FVector FinalLaunchDir = ForwardDir.RotateAngleAxis(fAngle, RotationAxis);
+
+	// 최종적으로 각도가 적용된 방향 벡터를 반환합니다.
+	return fAngle;
+}
+
+float ANNE_ProjectileSolver::GetAILaunchParameters(float HorizontalDist, float HeightDiff)
+{
+	if (!ModelInstance.IsValid()) return 0.f;
+
+	// --- [중요 1] 입력(X) 정규화 값 (순서: 수평거리, 높이차) ---
+	// 파이썬 학습 결과(Loss 0.003 버전)에서 나온 2개의 숫자입니다.
+	float X_Means[] = { 2417.5453, -47.6161 };
+	float X_Scales[] = { 976.734, 269.7443 };
 
 	TArray<float> InputData;
-	float RawX[] = { HorizontalDist, HeightDiff, Weight, Radius, TargetRad };
+	// 이제 입력은 수평거리와 높이차 2개만 사용합니다.
+	float RawX[] = { HorizontalDist, HeightDiff };
 
-	for (int i = 0; i < 5; ++i) {
+	for (int i = 0; i < 2; ++i) { // 5에서 2로 변경
 		float Normalized = (RawX[i] - X_Means[i]);
-		// 분모가 0이 되는 것을 방지
 		if (X_Scales[i] > 0.0001f) Normalized /= X_Scales[i];
 		InputData.Add(Normalized);
 	}
 
-	// 입력 모양 설정 (1행 5열)
+	// --- [중요 2] 입력 텐서 모양을 {1, 2}로 변경 ---
+	// AI 모델이 2개의 특징점(Feature)을 받도록 입구를 좁혔습니다.
 	TArray<UE::NNE::FTensorShape> InputShapes;
-	InputShapes.Add(UE::NNE::FTensorShape::Make({ 1, 5 }));
+	InputShapes.Add(UE::NNE::FTensorShape::Make({ 1, 2 }));
 
 	if (ModelInstance->SetInputTensorShapes(InputShapes) != UE::NNE::IModelInstanceCPU::ESetInputTensorShapesStatus::Ok)
 	{
-		UE_LOG(LogTemp, Error, TEXT("입력 모양 설정 실패! (5개여야 함)"));
-		return Results;
+		UE_LOG(LogTemp, Error, TEXT("입력 모양 설정 실패! (2개여야 함)"));
+		return 0.f;
 	}
 
+	// 3. 실행 로직 (동일)
 	TArray<float> OutputData;
 	OutputData.SetNumZeroed(2);
 
@@ -69,22 +90,17 @@ FLaunchParams ANNE_ProjectileSolver::GetAILaunchParameters(float HorizontalDist,
 	if (Status != UE::NNE::IModelInstanceCPU::ERunSyncStatus::Ok)
 	{
 		UE_LOG(LogTemp, Error, TEXT("AI 추론 실행 실패!"));
-		return Results;
+		return 0.f;
 	}
 
-	// ==========================================================
-	// [필독!] 파이썬 출력 결과에 나온 Y 역정규화 값으로 교체하세요.
-	// 순서: [각도(Angle), 힘(Impulse)]
-	// ==========================================================
-	float Y_Means[] = { -3.8f, 128158.45f };   // <-- 파이썬 출력값 참고
-	float Y_Scales[] = { 26.1f, 41720.9f };  // <-- 파이썬 출력값 참고
+	// --- [중요 3] 출력(y) 역정규화 값 (순서: 각도, 힘) ---
+	// 파이썬 학습 결과(Loss 0.003 버전)의 출력 정규화 수치입니다.
+	float Y_Means[] = { 11.4014 };
+	float Y_Scales[] = { 5.1054 };
 
-	Results.Angle = (OutputData[0] * Y_Scales[0]) + Y_Means[0];
-	Results.Impulse = (OutputData[1] * Y_Scales[1]) + Y_Means[1];
-	Results.bSuccess = true;
+	float fAngle = (OutputData[0] * Y_Scales[0]) + Y_Means[0];
 
-	// 디버깅용 로그: 이제 Impulse가 50000~200000 사이로 나와야 정상입니다.
-	UE_LOG(LogTemp, Warning, TEXT("AI 결과 -> Angle: %f, Impulse: %f"), Results.Angle, Results.Impulse);
+	UE_LOG(LogTemp, Warning, TEXT("AI 결과 -> Angle: %f"), fAngle);
 
-	return Results;
+	return fAngle;
 }

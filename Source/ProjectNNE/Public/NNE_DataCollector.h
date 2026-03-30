@@ -22,7 +22,7 @@ public:
      * 블루프린트에서 투사체가 타겟에 맞거나 파괴되는 시점에 호출하면 됩니다.
      */
     UFUNCTION(BlueprintCallable, Category = "NNE|Data")
-    void LogProjectileData(FVector StartLoc, FVector TargetLoc, float Angle, float Impulse, float Weight, float Radius, float TargetRad, bool bHit);
+    void LogProjectileData(FVector StartLoc, FVector TargetLoc, float Angle, bool bHit);
 
 private:
     // 파일에 문자열을 쓰는 헬퍼 함수
